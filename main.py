@@ -20,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Self-healing static files generator to ensure Render never crashes if static/index.html is missing
 def ensure_static_files():
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if not os.path.exists(static_dir):
@@ -45,7 +44,6 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background-co
 """)
 
     if not os.path.exists(html_file):
-        # Read local index.html if exists elsewhere or write from local template
         source_html = os.path.join(os.path.dirname(__file__), "static", "index.html")
         if os.path.exists(source_html) and source_html != html_file:
             with open(source_html, "r", encoding="utf-8") as rf:
@@ -99,7 +97,12 @@ class StudentCreate(BaseModel):
     roll_no: Optional[str] = ""
     name: str
     father_name: Optional[str] = ""
+    mother_name: Optional[str] = ""
+    aadhar_no: Optional[str] = ""
     contact_no: Optional[str] = ""
+    address: Optional[str] = ""
+    dob: Optional[str] = ""
+    gender: Optional[str] = ""
     class_id: int
     discount_flat: float = 0.00
     current_balance: float = 0.00
@@ -108,10 +111,18 @@ class StudentUpdate(BaseModel):
     roll_no: Optional[str] = None
     name: Optional[str] = None
     father_name: Optional[str] = None
+    mother_name: Optional[str] = None
+    aadhar_no: Optional[str] = None
     contact_no: Optional[str] = None
+    address: Optional[str] = None
+    dob: Optional[str] = None
+    gender: Optional[str] = None
     class_id: Optional[int] = None
     discount_flat: Optional[float] = None
     current_balance: Optional[float] = None
+
+class BulkStudentImportRequest(BaseModel):
+    students: List[StudentCreate]
 
 class GenerateBillsRequest(BaseModel):
     month_year: str
@@ -120,6 +131,7 @@ class GenerateBillsRequest(BaseModel):
 class CollectPaymentRequest(BaseModel):
     student_id: int
     amount_paid: float
+    concession_applied: Optional[float] = 0.00
     payment_mode: str
     reference_no: Optional[str] = ""
     collected_by: str
@@ -182,7 +194,7 @@ def delete_user(user_id: int):
     conn.close()
     return {"message": "User account deleted"}
 
-# ----------------- SYSTEM / LAN API -----------------
+# ----------------- SYSTEM API -----------------
 @app.get("/api/lan-info")
 def lan_info():
     return {
@@ -309,8 +321,8 @@ def list_students(
 
     if q:
         search_pattern = f"%{q.strip()}%"
-        query += " AND (s.admission_no LIKE ? OR s.name LIKE ? OR s.father_name LIKE ? OR s.roll_no LIKE ?)"
-        params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
+        query += " AND (s.admission_no LIKE ? OR s.name LIKE ? OR s.father_name LIKE ? OR s.mother_name LIKE ? OR s.aadhar_no LIKE ? OR s.roll_no LIKE ?)"
+        params.extend([search_pattern, search_pattern, search_pattern, search_pattern, search_pattern, search_pattern])
     
     if class_id:
         query += " AND s.class_id = ?"
@@ -377,20 +389,68 @@ def create_student(payload: StudentCreate):
     cursor = conn.cursor()
     try:
         execute_query(cursor, """
-            INSERT INTO students (admission_no, roll_no, name, father_name, contact_no, class_id, discount_flat, current_balance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO students (admission_no, roll_no, name, father_name, mother_name, aadhar_no, contact_no, address, dob, gender, class_id, discount_flat, current_balance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             payload.admission_no, payload.roll_no, payload.name,
-            payload.father_name, payload.contact_no, payload.class_id,
-            payload.discount_flat, payload.current_balance
+            payload.father_name, payload.mother_name, payload.aadhar_no,
+            payload.contact_no, payload.address, payload.dob, payload.gender,
+            payload.class_id, payload.discount_flat, payload.current_balance
         ))
         conn.commit()
         student_id = getattr(cursor, "lastrowid", None)
         conn.close()
         return {"id": student_id, **payload.dict()}
-    except Exception:
+    except Exception as e:
         conn.close()
-        raise HTTPException(status_code=400, detail="Admission number already exists.")
+        raise HTTPException(status_code=400, detail="Admission number already exists or invalid data.")
+
+@app.post("/api/students/import-csv")
+def bulk_import_students(payload: BulkStudentImportRequest):
+    conn = get_db()
+    cursor = conn.cursor()
+    imported_count = 0
+    updated_count = 0
+
+    for st in payload.students:
+        try:
+            # Check if student exists by admission_no
+            execute_query(cursor, "SELECT id FROM students WHERE admission_no = ?", (st.admission_no.strip(),))
+            existing = cursor.fetchone()
+            if existing:
+                execute_query(cursor, """
+                    UPDATE students SET 
+                        roll_no = ?, name = ?, father_name = ?, mother_name = ?,
+                        aadhar_no = ?, contact_no = ?, address = ?, dob = ?, gender = ?,
+                        class_id = ?, discount_flat = ?
+                    WHERE id = ?
+                """, (
+                    st.roll_no, st.name, st.father_name, st.mother_name,
+                    st.aadhar_no, st.contact_no, st.address, st.dob, st.gender,
+                    st.class_id, st.discount_flat, existing["id"]
+                ))
+                updated_count += 1
+            else:
+                execute_query(cursor, """
+                    INSERT INTO students (admission_no, roll_no, name, father_name, mother_name, aadhar_no, contact_no, address, dob, gender, class_id, discount_flat, current_balance)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    st.admission_no.strip(), st.roll_no, st.name,
+                    st.father_name, st.mother_name, st.aadhar_no,
+                    st.contact_no, st.address, st.dob, st.gender,
+                    st.class_id, st.discount_flat, st.current_balance
+                ))
+                imported_count += 1
+        except Exception as err:
+            print("Import error for student:", st.admission_no, err)
+
+    conn.commit()
+    conn.close()
+    return {
+        "message": f"Bulk import complete! {imported_count} new students added, {updated_count} existing students updated.",
+        "imported_count": imported_count,
+        "updated_count": updated_count
+    }
 
 @app.put("/api/students/{student_id}")
 def update_student(student_id: int, payload: StudentUpdate):
@@ -421,7 +481,7 @@ def delete_student(student_id: int):
     execute_query(cursor, "DELETE FROM students WHERE id = ?", (student_id,))
     conn.commit()
     conn.close()
-    return {"message": "Student deleted"}
+    return {"message": "Student deleted successfully"}
 
 # ----------------- BILL GENERATION -----------------
 @app.post("/api/generate-monthly-bills")
@@ -477,11 +537,11 @@ def generate_monthly_bills(payload: GenerateBillsRequest):
         "total_gross_billed": total_billed_sum
     }
 
-# ----------------- PAYMENT COLLECTION -----------------
+# ----------------- PAYMENT COLLECTION & CONCESSION DEDUCTION -----------------
 @app.post("/api/collect-payment")
 def collect_payment(payload: CollectPaymentRequest):
-    if payload.amount_paid <= 0:
-        raise HTTPException(status_code=400, detail="Amount paid must be greater than zero.")
+    if payload.amount_paid < 0:
+        raise HTTPException(status_code=400, detail="Amount paid cannot be negative.")
 
     conn = get_db()
     cursor = conn.cursor()
@@ -499,20 +559,30 @@ def collect_payment(payload: CollectPaymentRequest):
 
     student_dict = dict(student)
 
+    # Apply special concession/discount if specified
+    concession = float(payload.concession_applied or 0.00)
+    current_bal = float(student_dict["current_balance"])
+
+    # Total deduction from dues = amount_paid + concession_applied
+    total_deduction = payload.amount_paid + concession
+    new_balance = current_bal - total_deduction
+
     timestamp_str = datetime.now().strftime("%Y%m%d")
     cursor.execute("SELECT COUNT(*) FROM transactions")
     tx_count = cursor.fetchone()[0] + 1
     receipt_no = f"REC-{timestamp_str}-{tx_count:04d}"
 
+    # Insert Transaction record
     execute_query(cursor, """
         INSERT INTO transactions (receipt_no, student_id, amount_paid, payment_mode, reference_no, collected_by)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (receipt_no, payload.student_id, payload.amount_paid, payload.payment_mode, payload.reference_no, payload.collected_by))
 
-    new_balance = float(student_dict["current_balance"]) - payload.amount_paid
+    # Update student current_balance
     execute_query(cursor, "UPDATE students SET current_balance = ? WHERE id = ?", (new_balance, payload.student_id))
 
-    remaining_payment = payload.amount_paid
+    # Apply payment + concession to oldest charge sheets
+    remaining_deduction = total_deduction
     execute_query(cursor, """
         SELECT * FROM charge_sheets 
         WHERE student_id = ? AND status != 'PAID'
@@ -529,7 +599,7 @@ def collect_payment(payload: CollectPaymentRequest):
         if due_on_sheet <= 0:
             continue
 
-        allocate = min(remaining_payment, due_on_sheet)
+        allocate = min(remaining_deduction, due_on_sheet)
         new_sheet_paid = amount_paid_so_far + allocate
         new_status = "PAID" if new_sheet_paid >= total_payable else "PARTIALLY_PAID"
 
@@ -537,8 +607,8 @@ def collect_payment(payload: CollectPaymentRequest):
             UPDATE charge_sheets SET amount_paid = ?, status = ? WHERE id = ?
         """, (new_sheet_paid, new_status, sheet_id))
 
-        remaining_payment -= allocate
-        if remaining_payment <= 0:
+        remaining_deduction -= allocate
+        if remaining_deduction <= 0:
             break
 
     conn.commit()
@@ -567,7 +637,8 @@ def collect_payment(payload: CollectPaymentRequest):
             "contact_no": student_dict["contact_no"]
         },
         "fee_items": fee_items,
-        "previous_balance": float(student_dict["current_balance"]),
+        "previous_balance": current_bal,
+        "concession_applied": concession,
         "amount_paid": payload.amount_paid,
         "remaining_balance": new_balance,
         "payment_mode": payload.payment_mode,
@@ -576,7 +647,7 @@ def collect_payment(payload: CollectPaymentRequest):
     }
 
     return {
-        "message": "Payment collected successfully.",
+        "message": "Payment collected and concession applied successfully.",
         "receipt": receipt_payload
     }
 
@@ -644,15 +715,13 @@ def read_root():
     if os.path.exists(html_file):
         return FileResponse(html_file)
     else:
-        # Fallback inline response if static/index.html was omitted on GitHub upload
         return HTMLResponse("""
         <!DOCTYPE html>
         <html>
-        <head><title>St. Kabir Public School - Static Files Missing</title></head>
+        <head><title>St. Kabir Public School - System Ready</title></head>
         <body style="font-family:sans-serif; text-align:center; padding:50px;">
             <h2>⚠️ St. Kabir Public School Fee System</h2>
-            <p>The backend is running! However, <b>static/index.html</b> was not found in the GitHub upload.</p>
-            <p>Please upload the <b>static</b> folder (containing index.html) to your GitHub repository.</p>
+            <p>Backend API is active. Please upload static/index.html to complete web deployment.</p>
         </body>
         </html>
         """)

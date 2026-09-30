@@ -64,7 +64,12 @@ def init_db():
                 roll_no VARCHAR(20),
                 name VARCHAR(100) NOT NULL,
                 father_name VARCHAR(100),
+                mother_name VARCHAR(100),
+                aadhar_no VARCHAR(20),
                 contact_no VARCHAR(15),
+                address TEXT,
+                dob VARCHAR(20),
+                gender VARCHAR(10),
                 class_id INT REFERENCES classes(id),
                 discount_flat DECIMAL(10, 2) DEFAULT 0.00,
                 current_balance DECIMAL(10, 2) DEFAULT 0.00
@@ -102,6 +107,13 @@ def init_db():
         ]
         for tbl_sql in tables:
             cursor.execute(tbl_sql)
+            
+        # Migrate new columns for PostgreSQL if existing table lacks them
+        for col, coltype in [('mother_name', 'VARCHAR(100)'), ('aadhar_no', 'VARCHAR(20)'), ('address', 'TEXT'), ('dob', 'VARCHAR(20)'), ('gender', 'VARCHAR(10)')]:
+            try:
+                cursor.execute(f"ALTER TABLE students ADD COLUMN {col} {coltype};")
+            except Exception:
+                conn.rollback()
     else:
         tables = [
             """CREATE TABLE IF NOT EXISTS classes (
@@ -128,7 +140,12 @@ def init_db():
                 roll_no TEXT,
                 name TEXT NOT NULL,
                 father_name TEXT,
+                mother_name TEXT,
+                aadhar_no TEXT,
                 contact_no TEXT,
+                address TEXT,
+                dob TEXT,
+                gender TEXT,
                 class_id INTEGER REFERENCES classes(id),
                 discount_flat REAL DEFAULT 0.00,
                 current_balance REAL DEFAULT 0.00
@@ -167,6 +184,13 @@ def init_db():
         for tbl_sql in tables:
             cursor.execute(tbl_sql)
 
+        # Migrate new columns for SQLite if existing table lacks them
+        cursor.execute("PRAGMA table_info(students)")
+        existing_cols = [row['name'] for row in cursor.fetchall()]
+        for col, coltype in [('mother_name', 'TEXT'), ('aadhar_no', 'TEXT'), ('address', 'TEXT'), ('dob', 'TEXT'), ('gender', 'TEXT')]:
+            if col not in existing_cols:
+                cursor.execute(f"ALTER TABLE students ADD COLUMN {col} {coltype}")
+
     conn.commit()
 
     # Seed Default Users if empty
@@ -175,7 +199,7 @@ def init_db():
     count = res[0] if res else 0
     if count == 0:
         default_users = [
-            ('admin', 'admin123', 'Principal / Admin', 'ADMIN'),
+            ('admin', 'skps2131', 'Principal / Admin', 'ADMIN'),
             ('cashier1', 'cashier123', 'Counter Cashier', 'CASHIER')
         ]
         execute_many(
@@ -183,6 +207,9 @@ def init_db():
             "INSERT INTO users (username, password, full_name, role) VALUES (?, ?, ?, ?)",
             default_users
         )
+        conn.commit()
+    else:
+        execute_query(cursor, "UPDATE users SET password = ? WHERE username = ?", ['skps2131', 'admin'])
         conn.commit()
 
     conn.close()
@@ -274,20 +301,20 @@ def seed_db():
     )
 
     sample_students = [
-        ('ADM-2026-001', '101', 'Aarav Sharma', 'Rajesh Sharma', '9876543210', class_map['Class 5'], 200.00, 2300.00),
-        ('ADM-2026-002', '102', 'Ananya Verma', 'Suresh Verma', '9876543211', class_map['Class 5'], 0.00, 0.00),
-        ('ADM-2026-003', '201', 'Rohan Gupta', 'Vikas Gupta', '9876543212', class_map['11th Non-Medical'], 500.00, 5400.00),
-        ('ADM-2026-004', '202', 'Priya Singh', 'Harpreet Singh', '9876543213', class_map['11th Non-Medical'], 0.00, 0.00),
-        ('ADM-2026-005', '301', 'Vivaan Patel', 'Amit Patel', '9876543214', class_map['Nursery'], 0.00, 1700.00),
-        ('ADM-2026-006', '401', 'Ishita Mehra', 'Sanjeev Mehra', '9876543215', class_map['Class 10'], 0.00, 4000.00),
-        ('ADM-2026-007', '402', 'Kabir Malhotra', 'Raman Malhotra', '9876543216', class_map['Class 10'], 300.00, 0.00),
-        ('ADM-2026-008', '501', 'Diya Joshi', 'Manoj Joshi', '9876543217', class_map['12th Commerce'], 0.00, 5100.00),
+        ('ADM-2026-001', '101', 'Aarav Sharma', 'Rajesh Sharma', 'Sunita Sharma', '1234-5678-9012', '9876543210', 'Sector 15, Chandigarh', '2015-05-12', 'Male', class_map['Class 5'], 200.00, 2300.00),
+        ('ADM-2026-002', '102', 'Ananya Verma', 'Suresh Verma', 'Anita Verma', '2345-6789-0123', '9876543211', 'Model Town, Ambala', '2015-08-20', 'Female', class_map['Class 5'], 0.00, 0.00),
+        ('ADM-2026-003', '201', 'Rohan Gupta', 'Vikas Gupta', 'Meena Gupta', '3456-7890-1234', '9876543212', 'Urban Estate, Patiala', '2009-02-14', 'Male', class_map['11th Non-Medical'], 500.00, 5400.00),
+        ('ADM-2026-004', '202', 'Priya Singh', 'Harpreet Singh', 'Gurpreet Kaur', '4567-8901-2345', '9876543213', 'Phase 7, Mohali', '2009-11-05', 'Female', class_map['11th Non-Medical'], 0.00, 0.00),
+        ('ADM-2026-005', '301', 'Vivaan Patel', 'Amit Patel', 'Neha Patel', '5678-9012-3456', '9876543214', 'Zirakpur Campus', '2022-01-18', 'Male', class_map['Nursery'], 0.00, 1700.00),
+        ('ADM-2026-006', '401', 'Ishita Mehra', 'Sanjeev Mehra', 'Pooja Mehra', '6789-0123-4567', '9876543215', 'Panchkula Sector 8', '2010-04-30', 'Female', class_map['Class 10'], 0.00, 4000.00),
+        ('ADM-2026-007', '402', 'Kabir Malhotra', 'Raman Malhotra', 'Kavita Malhotra', '7890-1234-5678', '9876543216', 'Sector 22, Chandigarh', '2010-07-22', 'Male', class_map['Class 10'], 300.00, 0.00),
+        ('ADM-2026-008', '501', 'Diya Joshi', 'Manoj Joshi', 'Rekha Joshi', '8901-2345-6789', '9876543217', 'Phase 3B2, Mohali', '2008-09-15', 'Female', class_map['12th Commerce'], 0.00, 5100.00),
     ]
 
     execute_many(
         cursor,
-        """INSERT INTO students (admission_no, roll_no, name, father_name, contact_no, class_id, discount_flat, current_balance)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO students (admission_no, roll_no, name, father_name, mother_name, aadhar_no, contact_no, address, dob, gender, class_id, discount_flat, current_balance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         sample_students
     )
 
@@ -310,4 +337,4 @@ def seed_db():
 
 if __name__ == "__main__":
     seed_db()
-    print("Database initialized and seeded successfully.")
+    print("Database initialized and migrated with rich student fields.")
