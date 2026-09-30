@@ -1,0 +1,1979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>St. Kabir Public School - Internal Fee System</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f7ff',
+                            100: '#e0effe',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            700: '#075985',
+                            800: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- React & Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800 antialiased">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const API_BASE = "";
+
+        function App() {
+            // Auth State
+            const [currentUser, setCurrentUser] = useState(() => {
+                const saved = localStorage.getItem("st_kabir_user");
+                return saved ? JSON.parse(saved) : null;
+            });
+            const [loginUsername, setLoginUsername] = useState("");
+            const [loginPassword, setLoginPassword] = useState("");
+            const [loginError, setLoginError] = useState("");
+            const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+            // Active Tab State
+            const [activeTab, setActiveTab] = useState("counter");
+            const [lanInfo, setLanInfo] = useState({ school_name: "ST. KABIR PUBLIC SCHOOL", local_ip: "127.0.0.1", port: 8000, access_url: "http://localhost:8000" });
+            const [summary, setSummary] = useState({
+                total_dues_pending: null,
+                defaulters_count: null,
+                total_cash_today: null,
+                total_students: 0,
+                settled_count: 0,
+                recent_transactions: []
+            });
+
+            // Master Data & User list state
+            const [classList, setClassList] = useState([]);
+            const [feeHeads, setFeeHeads] = useState([]);
+
+            // Receipt Modal state
+            const [activeReceipt, setActiveReceipt] = useState(null);
+            const [printMode, setPrintMode] = useState("a4");
+
+            // Toast / Notification state
+            const [toast, setToast] = useState(null);
+
+            const showToast = (message, type = "success") => {
+                setToast({ message, type });
+                setTimeout(() => setToast(null), 4000);
+            };
+
+            const handleLogin = async (e) => {
+                if (e) e.preventDefault();
+                setLoginError("");
+                setIsLoggingIn(true);
+                try {
+                    const res = await fetch(`${API_BASE}/api/login`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ username: loginUsername, password: loginPassword })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || "Login failed");
+                    
+                    setCurrentUser(data);
+                    localStorage.setItem("st_kabir_user", JSON.stringify(data));
+                    showToast(`Welcome back, ${data.full_name}!`, "success");
+                    fetchSummary(data.role);
+                } catch (err) {
+                    setLoginError(err.message);
+                } finally {
+                    setIsLoggingIn(false);
+                }
+            };
+
+            const quickLogin = (u, p) => {
+                setLoginUsername(u);
+                setLoginPassword(p);
+                setIsLoggingIn(true);
+                fetch(`${API_BASE}/api/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username: u, password: p })
+                })
+                .then(res => res.json().then(data => ({ ok: res.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok) throw new Error(data.detail || "Login failed");
+                    setCurrentUser(data);
+                    localStorage.setItem("st_kabir_user", JSON.stringify(data));
+                    showToast(`Welcome, ${data.full_name}!`, "success");
+                    fetchSummary(data.role);
+                })
+                .catch(err => setLoginError(err.message))
+                .finally(() => setIsLoggingIn(false));
+            };
+
+            const handleLogout = () => {
+                setCurrentUser(null);
+                localStorage.removeItem("st_kabir_user");
+                setActiveTab("counter");
+                showToast("Logged out successfully.", "success");
+            };
+
+            const fetchSummary = async (role = currentUser?.role || "CASHIER") => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/reports/summary?role=${role}`);
+                    const data = await res.json();
+                    setSummary(data);
+                } catch (e) {
+                    console.error("Failed to load summary", e);
+                }
+            };
+
+            const fetchMasterData = async () => {
+                try {
+                    const [cRes, fRes, lRes] = await Promise.all([
+                        fetch(`${API_BASE}/api/classes`),
+                        fetch(`${API_BASE}/api/fee-heads`),
+                        fetch(`${API_BASE}/api/lan-info`)
+                    ]);
+                    setClassList(await cRes.json());
+                    setFeeHeads(await fRes.json());
+                    setLanInfo(await lRes.json());
+                } catch (e) {
+                    console.error("Failed to load master data", e);
+                }
+            };
+
+            useEffect(() => {
+                if (currentUser) {
+                    fetchMasterData();
+                    fetchSummary(currentUser.role);
+                }
+            }, [currentUser]);
+
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            });
+
+            const handlePrintReceipt = () => {
+                window.print();
+            };
+
+            // ==========================================
+            // LOGIN PAGE COMPONENT (When user is not authenticated)
+            // ==========================================
+            if (!currentUser) {
+                return (
+                    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-sky-950 to-slate-900 flex flex-col justify-center items-center p-4">
+                        <div class="max-w-md w-full bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200 animate-in fade-in zoom-in duration-300">
+                            <div class="bg-sky-700 p-8 text-white text-center relative">
+                                <div class="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center text-4xl mx-auto mb-3 shadow-inner backdrop-blur-sm">
+                                    🏫
+                                </div>
+                                <h1 class="font-black text-2xl tracking-tight">ST. KABIR PUBLIC SCHOOL</h1>
+                                <p class="text-xs text-sky-200 mt-1 font-medium">Internal School Fees Management System</p>
+                            </div>
+
+                            <div class="p-8">
+                                <form onSubmit={handleLogin} class="space-y-4">
+                                    <div>
+                                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                                            User ID / Username *
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={loginUsername}
+                                            onChange={(e) => setLoginUsername(e.target.value)}
+                                            placeholder="Enter your User ID"
+                                            class="w-full px-4 py-3 bg-slate-50 border rounded-xl font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm"
+                                            required
+                                            autoFocus
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                                            Password *
+                                        </label>
+                                        <input
+                                            type="password"
+                                            value={loginPassword}
+                                            onChange={(e) => setLoginPassword(e.target.value)}
+                                            placeholder="Enter your Password"
+                                            class="w-full px-4 py-3 bg-slate-50 border rounded-xl font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm"
+                                            required
+                                        />
+                                    </div>
+
+                                    {loginError && (
+                                        <div class="bg-rose-50 border border-rose-200 text-rose-700 p-3 rounded-lg text-xs font-bold text-center">
+                                            ⚠️ {loginError}
+                                        </div>
+                                    )}
+
+                                    <button
+                                        type="submit"
+                                        disabled={isLoggingIn}
+                                        class="w-full py-3.5 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl shadow-lg transition text-base"
+                                    >
+                                        {isLoggingIn ? "Authenticating..." : "🔑 Sign In to System"}
+                                    </button>
+                                </form>
+
+                                {/* DEMO ACCOUNTS HELPER */}
+                                <div class="mt-6 pt-6 border-t text-center">
+                                    <p class="text-xs text-slate-500 font-semibold mb-2">Instant Demo Login Accounts:</p>
+                                    <div class="flex gap-2 justify-center">
+                                        <button
+                                            type="button"
+                                            onClick={() => quickLogin('cashier1', 'cashier123')}
+                                            class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-bold border"
+                                        >
+                                            🔑 Demo Cashier
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => quickLogin('admin', 'admin123')}
+                                            class="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 rounded-lg text-xs font-bold"
+                                        >
+                                            👑 Demo Admin
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <p class="text-slate-400 text-xs mt-4">
+                            St. Kabir Public School LAN Server • Port 8000
+                        </p>
+                    </div>
+                );
+            }
+
+            // ==========================================
+            // LOGGED-IN SYSTEM APPLICATION
+            // ==========================================
+            const isAdmin = currentUser.role === "ADMIN";
+
+            return (
+                <div class="min-h-screen flex flex-col">
+                    {/* TOP NAVBAR */}
+                    <header class="bg-slate-900 text-white shadow-lg sticky top-0 z-30">
+                        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+                            <div class="flex items-center space-x-3">
+                                <div class="w-10 h-10 rounded-lg bg-sky-600 flex items-center justify-center font-bold text-xl text-white shadow">
+                                    🏫
+                                </div>
+                                <div>
+                                    <h1 class="font-black text-xl tracking-tight text-white">ST. KABIR PUBLIC SCHOOL</h1>
+                                    <p class="text-xs text-sky-400 font-medium">Internal Fee Management System • LAN Campus Edition</p>
+                                </div>
+                            </div>
+
+                            {/* TOTAL DUES STATS HIGHLIGHT BAR */}
+                            <div class="hidden lg:flex items-center space-x-6 text-sm bg-slate-800/90 px-4 py-1.5 rounded-lg border border-slate-700">
+                                {isAdmin ? (
+                                    <>
+                                        <div>
+                                            <span class="text-slate-400 text-xs block font-medium">Total Dues Pending</span>
+                                            <span class="font-bold text-rose-400 font-mono">₹{summary.total_dues_pending ? summary.total_dues_pending.toLocaleString('en-IN') : 0}</span>
+                                        </div>
+                                        <div class="w-px h-6 bg-slate-700"></div>
+                                        <div>
+                                            <span class="text-slate-400 text-xs block font-medium">Collected Today</span>
+                                            <span class="font-bold text-emerald-400 font-mono">₹{summary.total_cash_today ? summary.total_cash_today.toLocaleString('en-IN') : 0}</span>
+                                        </div>
+                                        <div class="w-px h-6 bg-slate-700"></div>
+                                        <div>
+                                            <span class="text-slate-400 text-xs block font-medium">Defaulters</span>
+                                            <span class="font-bold text-amber-400 font-mono">{summary.defaulters_count || 0} Students</span>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div class="flex items-center gap-2 py-0.5 text-xs text-amber-300">
+                                        <span>🔒 Total Dues Summary: <b>Restricted to Principal/Admin</b></span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* LOGGED IN USER PROFILE & LOGOUT */}
+                            <div class="flex items-center space-x-3 text-xs">
+                                <div class="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700">
+                                    <span class="font-bold text-white">
+                                        {isAdmin ? "👑" : "👤"} {currentUser.full_name}
+                                    </span>
+                                    <span class={`px-2 py-0.5 rounded text-[10px] font-bold ${isAdmin ? "bg-purple-500/20 text-purple-300 border border-purple-500/30" : "bg-sky-500/20 text-sky-300 border border-sky-500/30"}`}>
+                                        {currentUser.role}
+                                    </span>
+                                </div>
+
+                                <button
+                                    onClick={handleLogout}
+                                    class="px-3 py-1.5 bg-rose-600/80 hover:bg-rose-600 text-white font-bold rounded-xl transition text-xs shadow flex items-center gap-1"
+                                >
+                                    🚪 Logout
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* NAVIGATION TABS */}
+                        <div class="bg-slate-800 border-t border-slate-700/80 px-4">
+                            <div class="max-w-7xl mx-auto flex space-x-1 overflow-x-auto text-sm font-medium">
+                                <button
+                                    onClick={() => setActiveTab("counter")}
+                                    class={`px-4 py-2.5 border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
+                                        activeTab === "counter" 
+                                        ? "border-sky-500 text-sky-400 font-semibold bg-slate-700/50" 
+                                        : "border-transparent text-slate-300 hover:text-white hover:bg-slate-700/30"
+                                    }`}
+                                >
+                                    🛒 Cashier Counter
+                                </button>
+
+                                <button
+                                    onClick={() => setActiveTab("students")}
+                                    class={`px-4 py-2.5 border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
+                                        activeTab === "students" 
+                                        ? "border-sky-500 text-sky-400 font-semibold bg-slate-700/50" 
+                                        : "border-transparent text-slate-300 hover:text-white hover:bg-slate-700/30"
+                                    }`}
+                                >
+                                    🎓 Students Directory
+                                </button>
+
+                                {isAdmin && (
+                                    <>
+                                        <button
+                                            onClick={() => setActiveTab("master")}
+                                            class={`px-4 py-2.5 border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
+                                                activeTab === "master" 
+                                                ? "border-sky-500 text-sky-400 font-semibold bg-slate-700/50" 
+                                                : "border-transparent text-slate-300 hover:text-white hover:bg-slate-700/30"
+                                            }`}
+                                        >
+                                            ⚙️ Master Setup & Fees
+                                        </button>
+
+                                        <button
+                                            onClick={() => setActiveTab("batch")}
+                                            class={`px-4 py-2.5 border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
+                                                activeTab === "batch" 
+                                                ? "border-sky-500 text-sky-400 font-semibold bg-slate-700/50" 
+                                                : "border-transparent text-slate-300 hover:text-white hover:bg-slate-700/30"
+                                            }`}
+                                        >
+                                            📄 Monthly Batch Billing
+                                        </button>
+
+                                        <button
+                                            onClick={() => setActiveTab("reports")}
+                                            class={`px-4 py-2.5 border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
+                                                activeTab === "reports" 
+                                                ? "border-sky-500 text-sky-400 font-semibold bg-slate-700/50" 
+                                                : "border-transparent text-slate-300 hover:text-white hover:bg-slate-700/30"
+                                            }`}
+                                        >
+                                            📊 Reports & Defaulters
+                                        </button>
+
+                                        <button
+                                            onClick={() => setActiveTab("users")}
+                                            class={`px-4 py-2.5 border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
+                                                activeTab === "users" 
+                                                ? "border-purple-500 text-purple-300 font-semibold bg-slate-700/50" 
+                                                : "border-transparent text-slate-300 hover:text-white hover:bg-slate-700/30"
+                                            }`}
+                                        >
+                                            👥 Manage Staff User IDs
+                                        </button>
+                                    </>
+                                )}
+
+                                <button
+                                    onClick={() => setActiveTab("lan")}
+                                    class={`px-4 py-2.5 border-b-2 flex items-center gap-2 whitespace-nowrap transition-colors ${
+                                        activeTab === "lan" 
+                                        ? "border-sky-500 text-sky-400 font-semibold bg-slate-700/50" 
+                                        : "border-transparent text-slate-300 hover:text-white hover:bg-slate-700/30"
+                                    }`}
+                                >
+                                    🌐 LAN Setup Guide
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* TOAST NOTIFICATION */}
+                    {toast && (
+                        <div class={`fixed bottom-5 right-5 z-50 px-5 py-3 rounded-lg shadow-xl text-white font-medium flex items-center gap-3 transition-all ${
+                            toast.type === "error" ? "bg-rose-600" : "bg-emerald-600"
+                        }`}>
+                            <span>{toast.type === "error" ? "⚠️" : "✅"}</span>
+                            <span>{toast.message}</span>
+                        </div>
+                    )}
+
+                    {/* MAIN CONTENT AREA */}
+                    <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
+                        {activeTab === "counter" && (
+                            <CashierCounterTab 
+                                classList={classList} 
+                                currentUser={currentUser}
+                                onPaymentSuccess={(receipt) => {
+                                    setActiveReceipt(receipt);
+                                    fetchSummary(currentUser.role);
+                                }}
+                                showToast={showToast}
+                            />
+                        )}
+
+                        {activeTab === "students" && (
+                            <StudentsTab 
+                                classList={classList} 
+                                showToast={showToast}
+                                fetchSummary={() => fetchSummary(currentUser.role)}
+                            />
+                        )}
+
+                        {activeTab === "master" && isAdmin && (
+                            <MasterSetupTab 
+                                classList={classList}
+                                feeHeads={feeHeads}
+                                fetchMasterData={fetchMasterData}
+                                showToast={showToast}
+                            />
+                        )}
+
+                        {activeTab === "batch" && isAdmin && (
+                            <BatchBillingTab 
+                                showToast={showToast}
+                                fetchSummary={() => fetchSummary(currentUser.role)}
+                            />
+                        )}
+
+                        {activeTab === "reports" && isAdmin && (
+                            <ReportsTab 
+                                summary={summary}
+                                classList={classList}
+                                showToast={showToast}
+                            />
+                        )}
+
+                        {activeTab === "users" && isAdmin && (
+                            <UserManagementTab showToast={showToast} />
+                        )}
+
+                        {activeTab === "lan" && (
+                            <LanSetupTab lanInfo={lanInfo} />
+                        )}
+                    </main>
+
+                    {/* PRINTABLE RECEIPT MODAL */}
+                    {activeReceipt && (
+                        <div class="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+                            <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 relative my-8">
+                                <div class="flex items-center justify-between pb-4 mb-4 border-b">
+                                    <div class="flex items-center gap-3">
+                                        <h3 class="text-lg font-bold text-slate-800">Print Official Receipt</h3>
+                                        <div class="bg-slate-100 p-1 rounded-lg flex text-xs font-semibold">
+                                            <button 
+                                                onClick={() => setPrintMode("a4")} 
+                                                class={`px-3 py-1 rounded-md transition ${printMode === "a4" ? "bg-sky-600 text-white" : "text-slate-600"}`}
+                                            >
+                                                Standard A4
+                                            </button>
+                                            <button 
+                                                onClick={() => setPrintMode("thermal")} 
+                                                class={`px-3 py-1 rounded-md transition ${printMode === "thermal" ? "bg-sky-600 text-white" : "text-slate-600"}`}
+                                            >
+                                                Thermal (80mm)
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => setActiveReceipt(null)} 
+                                        class="text-slate-400 hover:text-slate-600 text-xl font-bold p-1"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+
+                                <div id="printable-receipt-area" class="my-4">
+                                    {printMode === "thermal" ? (
+                                        <div class="receipt-thermal border p-3 rounded text-slate-900 bg-white">
+                                            <div class="text-center font-bold text-sm">ST. KABIR PUBLIC SCHOOL</div>
+                                            <div class="text-center text-xs">Campus LAN Counter</div>
+                                            <div class="text-center text-xs mb-2">--------------------------------</div>
+                                            <div class="text-xs">Receipt No: <b>{activeReceipt.receipt_no}</b></div>
+                                            <div class="text-xs">Date: {activeReceipt.date}</div>
+                                            <div class="text-xs mb-2">Cashier: {activeReceipt.collected_by}</div>
+                                            <div class="text-center text-xs mb-2">--------------------------------</div>
+                                            <div class="text-xs">Student: <b>{activeReceipt.student.name}</b></div>
+                                            <div class="text-xs">Adm No: {activeReceipt.student.admission_no}</div>
+                                            <div class="text-xs">Class: {activeReceipt.student.class_name}</div>
+                                            <div class="text-xs mb-2">Father: {activeReceipt.student.father_name}</div>
+                                            <div class="text-center text-xs mb-2">--------------------------------</div>
+                                            <div class="font-bold text-xs mb-1">CHARGES BREAKDOWN:</div>
+                                            {activeReceipt.fee_items.map((item, idx) => (
+                                                <div key={idx} class="flex justify-between text-xs">
+                                                    <span>{item.title}</span>
+                                                    <span>₹{item.amount.toFixed(2)}</span>
+                                                </div>
+                                            ))}
+                                            <div class="text-center text-xs my-2">--------------------------------</div>
+                                            <div class="flex justify-between text-xs">
+                                                <span>Prev. Balance:</span>
+                                                <span>₹{activeReceipt.previous_balance.toFixed(2)}</span>
+                                            </div>
+                                            <div class="flex justify-between text-xs font-bold text-emerald-800">
+                                                <span>PAID NOW ({activeReceipt.payment_mode}):</span>
+                                                <span>₹{activeReceipt.amount_paid.toFixed(2)}</span>
+                                            </div>
+                                            <div class="flex justify-between text-xs font-bold text-rose-800">
+                                                <span>REMAINING BAL:</span>
+                                                <span>₹{activeReceipt.remaining_balance.toFixed(2)}</span>
+                                            </div>
+                                            <div class="text-center text-xs mt-3">--------------------------------</div>
+                                            <div class="text-center text-xs font-italic mt-2">Thank you! Keep safely.</div>
+                                        </div>
+                                    ) : (
+                                        <div class="receipt-a4 border p-6 bg-white text-slate-800">
+                                            <div class="flex justify-between items-start border-b pb-4 mb-4">
+                                                <div>
+                                                    <h2 class="text-2xl font-black tracking-tight text-slate-900">ST. KABIR PUBLIC SCHOOL</h2>
+                                                    <p class="text-xs text-slate-500">Recognised & Affiliated School • Main Campus LAN</p>
+                                                    <p class="text-xs text-slate-500">Phone: +91 98765 43210 • Email: fee@stkabirschool.edu</p>
+                                                </div>
+                                                <div class="text-right">
+                                                    <span class="inline-block px-3 py-1 bg-sky-100 text-sky-800 text-xs font-bold rounded-full mb-1">OFFICIAL FEE RECEIPT</span>
+                                                    <p class="text-sm font-bold text-slate-800">{activeReceipt.receipt_no}</p>
+                                                    <p class="text-xs text-slate-500">{activeReceipt.date}</p>
+                                                </div>
+                                            </div>
+
+                                            <div class="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-lg text-sm mb-4 border">
+                                                <div>
+                                                    <p class="text-slate-500 text-xs">Student Name</p>
+                                                    <p class="font-bold text-slate-800">{activeReceipt.student.name}</p>
+                                                    <p class="text-slate-500 text-xs mt-2">Father's Name</p>
+                                                    <p class="font-medium text-slate-800">{activeReceipt.student.father_name || "N/A"}</p>
+                                                </div>
+                                                <div>
+                                                    <p class="text-slate-500 text-xs">Admission No / Roll No</p>
+                                                    <p class="font-mono font-bold text-slate-800">{activeReceipt.student.admission_no} ({activeReceipt.student.roll_no || "N/A"})</p>
+                                                    <p class="text-slate-500 text-xs mt-2">Class & Stream</p>
+                                                    <p class="font-medium text-slate-800">{activeReceipt.student.class_name}</p>
+                                                </div>
+                                            </div>
+
+                                            <div class="mb-4">
+                                                <table class="w-full text-sm text-left border border-slate-200 rounded">
+                                                    <thead class="bg-slate-100 text-slate-700 font-semibold border-b">
+                                                        <tr>
+                                                            <th class="p-2.5">Fee Head Item</th>
+                                                            <th class="p-2.5 text-right">Standard Amount</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody class="divide-y divide-slate-100">
+                                                        {activeReceipt.fee_items.map((item, idx) => (
+                                                            <tr key={idx}>
+                                                                <td class="p-2.5 font-medium">{item.title}</td>
+                                                                <td class="p-2.5 text-right font-mono">₹{item.amount.toFixed(2)}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            <div class="bg-slate-50 p-4 rounded-lg border text-sm grid grid-cols-2 gap-4 mb-6">
+                                                <div>
+                                                    <p class="text-xs text-slate-500">Payment Mode & Ref</p>
+                                                    <p class="font-bold text-slate-800">{activeReceipt.payment_mode} {activeReceipt.reference_no ? `(${activeReceipt.reference_no})` : ''}</p>
+                                                    <p class="text-xs text-slate-500 mt-2">Collected By Cashier</p>
+                                                    <p class="font-medium text-slate-800">{activeReceipt.collected_by}</p>
+                                                </div>
+                                                <div class="text-right space-y-1">
+                                                    <div class="flex justify-between text-slate-600 text-xs">
+                                                        <span>Previous Balance Due:</span>
+                                                        <span class="font-mono">₹{activeReceipt.previous_balance.toFixed(2)}</span>
+                                                    </div>
+                                                    <div class="flex justify-between font-bold text-emerald-700 text-base border-t pt-1">
+                                                        <span>AMOUNT PAID NOW:</span>
+                                                        <span class="font-mono">₹{activeReceipt.amount_paid.toFixed(2)}</span>
+                                                    </div>
+                                                    <div class="flex justify-between font-bold text-rose-700 text-sm border-t pt-1">
+                                                        <span>REMAINING DUES BALANCE:</span>
+                                                        <span class="font-mono">₹{activeReceipt.remaining_balance.toFixed(2)}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div class="flex justify-between items-end pt-8 border-t text-xs text-slate-500">
+                                                <div>
+                                                    <p>Note: Computer generated receipt for St. Kabir Public School.</p>
+                                                    <p>Fees once paid are non-refundable.</p>
+                                                </div>
+                                                <div class="text-center">
+                                                    <div class="w-40 border-b border-slate-400 mb-1"></div>
+                                                    <p class="font-bold text-slate-700">Authorised Cashier Signature</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div class="flex justify-end gap-3 pt-4 border-t">
+                                    <button 
+                                        onClick={() => setActiveReceipt(null)} 
+                                        class="px-4 py-2 rounded-lg border text-slate-600 hover:bg-slate-100 font-medium text-sm"
+                                    >
+                                        Close
+                                    </button>
+                                    <button 
+                                        onClick={handlePrintReceipt} 
+                                        class="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow flex items-center gap-2"
+                                    >
+                                        🖨️ Print Receipt (Ctrl + P)
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 1. CASHIER COUNTER TAB
+        // ==========================================
+        function CashierCounterTab({ classList, currentUser, onPaymentSuccess, showToast }) {
+            const [searchQuery, setSearchQuery] = useState("");
+            const [students, setStudents] = useState([]);
+            const [selectedStudent, setSelectedStudent] = useState(null);
+            const [studentDetails, setStudentDetails] = useState(null);
+            const [loading, setLoading] = useState(false);
+
+            const [amountPaid, setAmountPaid] = useState("");
+            const [paymentMode, setPaymentMode] = useState("CASH");
+            const [referenceNo, setReferenceNo] = useState("");
+            const [collectedBy, setCollectedBy] = useState(currentUser?.full_name || "Counter Cashier");
+            const [isSubmitting, setIsSubmitting] = useState(false);
+
+            useEffect(() => {
+                searchStudents();
+            }, [searchQuery]);
+
+            const searchStudents = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/students?q=${encodeURIComponent(searchQuery)}`);
+                    const data = await res.json();
+                    setStudents(data);
+                    if (data.length === 1 && !selectedStudent) {
+                        selectStudent(data[0]);
+                    }
+                } catch (e) {
+                    console.error("Search error", e);
+                }
+            };
+
+            const selectStudent = async (student) => {
+                setSelectedStudent(student);
+                setLoading(true);
+                try {
+                    const res = await fetch(`${API_BASE}/api/students/${student.id}`);
+                    const data = await res.json();
+                    setStudentDetails(data);
+                    setAmountPaid(data.student.current_balance > 0 ? data.student.current_balance.toString() : "0");
+                } catch (e) {
+                    showToast("Failed to fetch student details", "error");
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleCollectPayment = async (e) => {
+                e.preventDefault();
+                const amt = parseFloat(amountPaid);
+                if (!amt || amt <= 0) {
+                    showToast("Please enter a valid payment amount.", "error");
+                    return;
+                }
+
+                setIsSubmitting(true);
+                try {
+                    const res = await fetch(`${API_BASE}/api/collect-payment`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            student_id: selectedStudent.id,
+                            amount_paid: amt,
+                            payment_mode: paymentMode,
+                            reference_no: referenceNo,
+                            collected_by: collectedBy
+                        })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || "Payment failed");
+                    showToast(`Payment of ₹${amt} collected! Receipt generated.`, "success");
+                    onPaymentSuccess(data.receipt);
+                    selectStudent(selectedStudent);
+                } catch (err) {
+                    showToast(err.message, "error");
+                } finally {
+                    setIsSubmitting(false);
+                }
+            };
+
+            return (
+                <div class="space-y-6">
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row items-center gap-4">
+                        <div class="relative flex-1 w-full">
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-lg">🔍</span>
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Fast Search: Enter Admission No, Student Name, Roll No, or Class..."
+                                class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-medium text-base focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white"
+                                autoFocus
+                            />
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        <div class="lg:col-span-5 bg-white rounded-xl shadow-sm border border-slate-200 p-4 max-h-[700px] flex flex-col">
+                            <h3 class="font-bold text-sm text-slate-700 uppercase tracking-wider mb-3 flex justify-between items-center">
+                                <span>Matching Students</span>
+                                <span class="bg-slate-100 px-2 py-0.5 rounded text-xs text-slate-600 font-mono">{students.length} found</span>
+                            </h3>
+
+                            <div class="flex-1 overflow-y-auto divide-y divide-slate-100 pr-1">
+                                {students.length === 0 ? (
+                                    <div class="text-center py-12 text-slate-400 text-sm">
+                                        No students found matching your query.
+                                    </div>
+                                ) : (
+                                    students.map(st => (
+                                        <div
+                                            key={st.id}
+                                            onClick={() => selectStudent(st)}
+                                            class={`p-3 rounded-lg cursor-pointer transition flex items-center justify-between border my-1 ${
+                                                selectedStudent?.id === st.id
+                                                ? "bg-sky-50 border-sky-400 shadow-sm"
+                                                : "border-slate-100 hover:bg-slate-50"
+                                            }`}
+                                        >
+                                            <div>
+                                                <div class="flex items-center gap-2">
+                                                    <span class="font-bold text-slate-900 text-base">{st.name}</span>
+                                                    <span class="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded font-semibold">{st.class_name}</span>
+                                                </div>
+                                                <div class="text-xs text-slate-500 mt-1 flex gap-3">
+                                                    <span>Adm: <b class="font-mono text-slate-700">{st.admission_no}</b></span>
+                                                    <span>Father: <b>{st.father_name || 'N/A'}</b></span>
+                                                </div>
+                                            </div>
+
+                                            <div class="text-right">
+                                                <div class={`text-sm font-bold font-mono px-2.5 py-1 rounded-full inline-block ${
+                                                    st.current_balance > 0 
+                                                    ? "bg-rose-100 text-rose-700 border border-rose-200" 
+                                                    : "bg-emerald-100 text-emerald-700 border border-emerald-200"
+                                                }`}>
+                                                    ₹{st.current_balance.toLocaleString('en-IN')}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-7 space-y-6">
+                            {!selectedStudent ? (
+                                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-400">
+                                    <div class="text-5xl mb-3">💳</div>
+                                    <h3 class="text-lg font-bold text-slate-600 mb-1">No Student Selected</h3>
+                                    <p class="text-sm">Select a student from the left panel to collect fees and issue official St. Kabir Public School receipts.</p>
+                                </div>
+                            ) : loading ? (
+                                <div class="bg-white rounded-xl shadow-sm border p-12 text-center text-slate-500">
+                                    Loading student details...
+                                </div>
+                            ) : (
+                                <>
+                                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                                        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b pb-4 mb-4">
+                                            <div>
+                                                <div class="flex items-center gap-3">
+                                                    <h2 class="text-2xl font-bold text-slate-900">{selectedStudent.name}</h2>
+                                                    <span class="bg-sky-100 text-sky-800 text-xs font-bold px-3 py-1 rounded-full border border-sky-200">
+                                                        {selectedStudent.class_name}
+                                                    </span>
+                                                </div>
+                                                <p class="text-sm text-slate-500 mt-1">
+                                                    Father: <b class="text-slate-800">{selectedStudent.father_name || "N/A"}</b> • Adm No: <b class="font-mono text-slate-800">{selectedStudent.admission_no}</b>
+                                                </p>
+                                            </div>
+
+                                            <div class={`px-5 py-3 rounded-xl text-right border shadow-sm ${
+                                                selectedStudent.current_balance > 0 
+                                                ? "bg-rose-50 border-rose-200 text-rose-900" 
+                                                : "bg-emerald-50 border-emerald-200 text-emerald-900"
+                                            }`}>
+                                                <span class="text-xs uppercase font-bold tracking-wider block opacity-75">
+                                                    {selectedStudent.current_balance > 0 ? "STUDENT PENDING DUES" : "ACCOUNT SETTLED"}
+                                                </span>
+                                                <span class="text-2xl font-black font-mono">
+                                                    ₹{selectedStudent.current_balance.toLocaleString('en-IN')}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div class="bg-slate-50 rounded-lg p-3 text-xs border mb-2">
+                                            <h4 class="font-semibold text-slate-600 mb-1">Class Fee Structure Breakdown:</h4>
+                                            <div class="flex flex-wrap gap-3">
+                                                {studentDetails?.class_fees?.map((f, i) => (
+                                                    <span key={i} class="bg-white px-2.5 py-1 rounded border text-slate-700 font-medium">
+                                                        {f.title}: <b>₹{f.amount}</b> ({f.type})
+                                                    </span>
+                                                ))}
+                                                {selectedStudent.discount_flat > 0 && (
+                                                    <span class="bg-amber-50 border border-amber-200 text-amber-800 px-2.5 py-1 rounded font-bold">
+                                                        Flat Concession: -₹{selectedStudent.discount_flat}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                                        <h3 class="font-bold text-lg text-slate-900 mb-4 flex items-center gap-2">
+                                            <span>💵</span> Collect Payment & Generate Official Receipt
+                                        </h3>
+
+                                        <form onSubmit={handleCollectPayment} class="space-y-4">
+                                            <div class="flex items-center gap-2 text-xs font-semibold">
+                                                <span class="text-slate-500">Quick Fill Amount:</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setAmountPaid(selectedStudent.current_balance.toString())}
+                                                    class="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md border"
+                                                >
+                                                    Full Dues (₹{selectedStudent.current_balance})
+                                                </button>
+                                            </div>
+
+                                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Amount Collected (₹) *</label>
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        value={amountPaid}
+                                                        onChange={(e) => setAmountPaid(e.target.value)}
+                                                        class="w-full px-3 py-2.5 bg-slate-50 border rounded-lg text-slate-900 font-bold font-mono text-lg"
+                                                        required
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Payment Mode *</label>
+                                                    <select
+                                                        value={paymentMode}
+                                                        onChange={(e) => setPaymentMode(e.target.value)}
+                                                        class="w-full px-3 py-2.5 bg-slate-50 border rounded-lg text-slate-900 font-medium"
+                                                    >
+                                                        <option value="CASH">💵 CASH</option>
+                                                        <option value="CHEQUE">🏦 CHEQUE</option>
+                                                        <option value="UPI">📱 UPI / QR Code</option>
+                                                        <option value="POS_CARD">💳 POS CARD</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+
+                                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Reference / Cheque Details</label>
+                                                    <input
+                                                        type="text"
+                                                        value={referenceNo}
+                                                        onChange={(e) => setReferenceNo(e.target.value)}
+                                                        placeholder="Cheque No, Txn ID..."
+                                                        class="w-full px-3 py-2 bg-slate-50 border rounded-lg text-slate-900 text-sm"
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Collected By (Staff Name) *</label>
+                                                    <input
+                                                        type="text"
+                                                        value={collectedBy}
+                                                        onChange={(e) => setCollectedBy(e.target.value)}
+                                                        class="w-full px-3 py-2 bg-slate-50 border rounded-lg text-slate-900 text-sm"
+                                                        required
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div class="pt-2">
+                                                <button
+                                                    type="submit"
+                                                    disabled={isSubmitting}
+                                                    class="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-base"
+                                                >
+                                                    {isSubmitting ? "Processing Payment..." : "✅ Confirm Payment & Issue Receipt"}
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 2. STUDENTS DIRECTORY TAB
+        // ==========================================
+        function StudentsTab({ classList, showToast, fetchSummary }) {
+            const [students, setStudents] = useState([]);
+            const [selectedClass, setSelectedClass] = useState("");
+            const [searchQuery, setSearchQuery] = useState("");
+            const [showAddModal, setShowAddModal] = useState(false);
+            const [selectedStudentLedger, setSelectedStudentLedger] = useState(null);
+
+            const [newStudent, setNewStudent] = useState({
+                admission_no: "",
+                roll_no: "",
+                name: "",
+                father_name: "",
+                contact_no: "",
+                class_id: classList[0]?.id || 1,
+                discount_flat: 0,
+                current_balance: 0
+            });
+
+            useEffect(() => {
+                fetchStudents();
+            }, [selectedClass, searchQuery]);
+
+            const fetchStudents = async () => {
+                let url = `${API_BASE}/api/students?q=${encodeURIComponent(searchQuery)}`;
+                if (selectedClass) url += `&class_id=${selectedClass}`;
+                try {
+                    const res = await fetch(url);
+                    setStudents(await res.json());
+                } catch (e) {
+                    console.error("Failed to load students", e);
+                }
+            };
+
+            const handleCreateStudent = async (e) => {
+                e.preventDefault();
+                try {
+                    const res = await fetch(`${API_BASE}/api/students`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(newStudent)
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || "Error adding student");
+                    showToast(`Student ${newStudent.name} enrolled successfully!`, "success");
+                    setShowAddModal(false);
+                    fetchStudents();
+                    fetchSummary();
+                } catch (err) {
+                    showToast(err.message, "error");
+                }
+            };
+
+            const viewLedger = async (studentId) => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/students/${studentId}`);
+                    setSelectedStudentLedger(await res.json());
+                } catch (e) {
+                    showToast("Failed to fetch student ledger", "error");
+                }
+            };
+
+            return (
+                <div class="space-y-6">
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div class="flex items-center gap-3 w-full md:w-auto">
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Search student name, adm no..."
+                                class="px-3 py-2 bg-slate-50 border rounded-lg text-sm w-64"
+                            />
+                            <select
+                                value={selectedClass}
+                                onChange={(e) => setSelectedClass(e.target.value)}
+                                class="px-3 py-2 bg-slate-50 border rounded-lg text-sm font-medium"
+                            >
+                                <option value="">All Classes</option>
+                                {classList.map(c => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <button
+                            onClick={() => setShowAddModal(true)}
+                            class="px-4 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-lg text-sm shadow flex items-center gap-2"
+                        >
+                            ➕ Enroll New Student
+                        </button>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="bg-slate-800 text-white text-xs uppercase font-semibold">
+                                    <tr>
+                                        <th class="p-3">Adm No</th>
+                                        <th class="p-3">Student Name</th>
+                                        <th class="p-3">Class</th>
+                                        <th class="p-3">Father's Name</th>
+                                        <th class="p-3">Contact</th>
+                                        <th class="p-3">Flat Concession</th>
+                                        <th class="p-3">Current Balance</th>
+                                        <th class="p-3 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100">
+                                    {students.map(st => (
+                                        <tr key={st.id} class="hover:bg-slate-50">
+                                            <td class="p-3 font-mono font-bold text-slate-800">{st.admission_no}</td>
+                                            <td class="p-3 font-bold text-slate-900">{st.name}</td>
+                                            <td class="p-3">
+                                                <span class="bg-slate-100 text-slate-700 text-xs px-2 py-1 rounded font-semibold border">
+                                                    {st.class_name}
+                                                </span>
+                                            </td>
+                                            <td class="p-3 text-slate-600">{st.father_name || "N/A"}</td>
+                                            <td class="p-3 text-slate-600 font-mono">{st.contact_no || "N/A"}</td>
+                                            <td class="p-3 text-slate-600 font-mono">₹{st.discount_flat}</td>
+                                            <td class="p-3 font-mono font-bold">
+                                                <span class={st.current_balance > 0 ? "text-rose-600 font-bold" : "text-emerald-600"}>
+                                                    ₹{st.current_balance.toLocaleString('en-IN')}
+                                                </span>
+                                            </td>
+                                            <td class="p-3 text-right">
+                                                <button
+                                                    onClick={() => viewLedger(st.id)}
+                                                    class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold border"
+                                                >
+                                                    📋 View Ledger
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {showAddModal && (
+                        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+                                <h3 class="text-lg font-bold text-slate-900 mb-4 border-b pb-2">Enroll New Student</h3>
+                                <form onSubmit={handleCreateStudent} class="space-y-3 text-sm">
+                                    <div>
+                                        <label class="block text-xs font-bold text-slate-700 mb-1">Admission No *</label>
+                                        <input
+                                            type="text"
+                                            value={newStudent.admission_no}
+                                            onChange={(e) => setNewStudent({...newStudent, admission_no: e.target.value})}
+                                            placeholder="e.g. ADM-2026-099"
+                                            class="w-full p-2 border rounded font-mono"
+                                            required
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-bold text-slate-700 mb-1">Student Full Name *</label>
+                                        <input
+                                            type="text"
+                                            value={newStudent.name}
+                                            onChange={(e) => setNewStudent({...newStudent, name: e.target.value})}
+                                            class="w-full p-2 border rounded"
+                                            required
+                                        />
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label class="block text-xs font-bold text-slate-700 mb-1">Assign Class *</label>
+                                            <select
+                                                value={newStudent.class_id}
+                                                onChange={(e) => setNewStudent({...newStudent, class_id: parseInt(e.target.value)})}
+                                                class="w-full p-2 border rounded"
+                                            >
+                                                {classList.map(c => (
+                                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-bold text-slate-700 mb-1">Roll No</label>
+                                            <input
+                                                type="text"
+                                                value={newStudent.roll_no}
+                                                onChange={(e) => setNewStudent({...newStudent, roll_no: e.target.value})}
+                                                class="w-full p-2 border rounded"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-bold text-slate-700 mb-1">Father's Name</label>
+                                        <input
+                                            type="text"
+                                            value={newStudent.father_name}
+                                            onChange={(e) => setNewStudent({...newStudent, father_name: e.target.value})}
+                                            class="w-full p-2 border rounded"
+                                        />
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label class="block text-xs font-bold text-slate-700 mb-1">Contact No</label>
+                                            <input
+                                                type="text"
+                                                value={newStudent.contact_no}
+                                                onChange={(e) => setNewStudent({...newStudent, contact_no: e.target.value})}
+                                                class="w-full p-2 border rounded font-mono"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-bold text-slate-700 mb-1">Flat Discount (₹)</label>
+                                            <input
+                                                type="number"
+                                                value={newStudent.discount_flat}
+                                                onChange={(e) => setNewStudent({...newStudent, discount_flat: parseFloat(e.target.value) || 0})}
+                                                class="w-full p-2 border rounded font-mono"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div class="flex justify-end gap-2 pt-4 border-t">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowAddModal(false)}
+                                            class="px-4 py-2 border rounded text-slate-600 hover:bg-slate-100"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            class="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded shadow"
+                                        >
+                                            Save Student
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {selectedStudentLedger && (
+                        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div class="bg-white rounded-xl shadow-xl max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto">
+                                <div class="flex justify-between items-center border-b pb-3 mb-4">
+                                    <div>
+                                        <h3 class="text-xl font-bold text-slate-900">{selectedStudentLedger.student.name}</h3>
+                                        <p class="text-xs text-slate-500">Adm: {selectedStudentLedger.student.admission_no} • Class: {selectedStudentLedger.student.class_name}</p>
+                                    </div>
+                                    <button onClick={() => setSelectedStudentLedger(null)} class="text-slate-400 font-bold text-xl">✕</button>
+                                </div>
+
+                                <div class="space-y-6">
+                                    <div>
+                                        <h4 class="font-bold text-sm text-slate-700 mb-2">📜 Charge Sheets (Billed Monthly)</h4>
+                                        <table class="w-full text-xs text-left border">
+                                            <thead class="bg-slate-100 text-slate-700">
+                                                <tr>
+                                                    <th class="p-2">Month</th>
+                                                    <th class="p-2">Gross</th>
+                                                    <th class="p-2">Discount</th>
+                                                    <th class="p-2">Total Payable</th>
+                                                    <th class="p-2">Amount Paid</th>
+                                                    <th class="p-2">Status</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {selectedStudentLedger.charge_sheets.map(cs => (
+                                                    <tr key={cs.id} class="border-t">
+                                                        <td class="p-2 font-medium">{cs.month_year}</td>
+                                                        <td class="p-2 font-mono">₹{cs.gross_billed}</td>
+                                                        <td class="p-2 font-mono">₹{cs.discount_applied}</td>
+                                                        <td class="p-2 font-mono font-bold">₹{cs.total_payable}</td>
+                                                        <td class="p-2 font-mono text-emerald-700">₹{cs.amount_paid}</td>
+                                                        <td class="p-2">
+                                                            <span class={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                                cs.status === 'PAID' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                                            }`}>
+                                                                {cs.status}
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <div>
+                                        <h4 class="font-bold text-sm text-slate-700 mb-2">💳 Payment Receipts Issued</h4>
+                                        <table class="w-full text-xs text-left border">
+                                            <thead class="bg-slate-100 text-slate-700">
+                                                <tr>
+                                                    <th class="p-2">Receipt No</th>
+                                                    <th class="p-2">Date</th>
+                                                    <th class="p-2">Mode</th>
+                                                    <th class="p-2">Ref</th>
+                                                    <th class="p-2">Paid</th>
+                                                    <th class="p-2">Cashier</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {selectedStudentLedger.transactions.map(tx => (
+                                                    <tr key={tx.id} class="border-t">
+                                                        <td class="p-2 font-mono font-bold text-sky-700">{tx.receipt_no}</td>
+                                                        <td class="p-2 text-slate-500">{tx.created_at}</td>
+                                                        <td class="p-2 font-semibold">{tx.payment_mode}</td>
+                                                        <td class="p-2 text-slate-500">{tx.reference_no || 'N/A'}</td>
+                                                        <td class="p-2 font-mono font-bold text-emerald-700">₹{tx.amount_paid}</td>
+                                                        <td class="p-2">{tx.collected_by}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 3. MASTER SETUP TAB
+        // ==========================================
+        function MasterSetupTab({ classList, feeHeads, fetchMasterData, showToast }) {
+            const [matrix, setMatrix] = useState({});
+            const [newClassName, setNewClassName] = useState("");
+            const [newClassCategory, setNewClassCategory] = useState("PRIMARY");
+            const [newFeeTitle, setNewFeeTitle] = useState("");
+            const [newFeeType, setNewFeeType] = useState("MONTHLY");
+
+            useEffect(() => {
+                fetchStructure();
+            }, []);
+
+            const fetchStructure = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/class-fee-structure`);
+                    const data = await res.json();
+                    const map = {};
+                    data.forEach(item => {
+                        map[`${item.class_id}_${item.fee_head_id}`] = item.amount;
+                    });
+                    setMatrix(map);
+                } catch (e) {
+                    console.error("Failed to load fee matrix", e);
+                }
+            };
+
+            const handleMatrixChange = (classId, headId, val) => {
+                setMatrix({ ...matrix, [`${classId}_${headId}`]: val });
+            };
+
+            const saveFeeAmount = async (classId, headId) => {
+                const amount = parseFloat(matrix[`${classId}_${headId}`]) || 0;
+                try {
+                    await fetch(`${API_BASE}/api/class-fee-structure`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            class_id: classId,
+                            fee_head_id: headId,
+                            amount: amount,
+                            academic_year: "2026-2027"
+                        })
+                    });
+                    showToast("Fee structure updated!", "success");
+                } catch (e) {
+                    showToast("Failed to save fee structure", "error");
+                }
+            };
+
+            const handleAddClass = async (e) => {
+                e.preventDefault();
+                try {
+                    const res = await fetch(`${API_BASE}/api/classes`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name: newClassName, category: newClassCategory })
+                    });
+                    if (!res.ok) throw new Error("Class exists or invalid");
+                    setNewClassName("");
+                    fetchMasterData();
+                    showToast("Class added!", "success");
+                } catch (e) {
+                    showToast(e.message, "error");
+                }
+            };
+
+            const handleAddFeeHead = async (e) => {
+                e.preventDefault();
+                try {
+                    await fetch(`${API_BASE}/api/fee-heads`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ title: newFeeTitle, type: newFeeType })
+                    });
+                    setNewFeeTitle("");
+                    fetchMasterData();
+                    showToast("Fee Head added!", "success");
+                } catch (e) {
+                    showToast("Failed to add fee head", "error");
+                }
+            };
+
+            return (
+                <div class="space-y-8">
+                    <div class="bg-white rounded-xl shadow-sm border p-6">
+                        <h3 class="font-bold text-lg text-slate-900 mb-2">📊 Class Fee Structure Amount Matrix (St. Kabir Public School)</h3>
+                        <p class="text-xs text-slate-500 mb-4">Set master fee head amounts per class stream. Changes save automatically per cell.</p>
+
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm border text-left">
+                                <thead class="bg-slate-800 text-white text-xs">
+                                    <tr>
+                                        <th class="p-3 border-r">Class Name</th>
+                                        {feeHeads.map(h => (
+                                            <th key={h.id} class="p-3 border-r text-center">
+                                                {h.title}
+                                                <span class="block text-[10px] text-slate-300 font-normal">{h.type}</span>
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-200">
+                                    {classList.map(c => (
+                                        <tr key={c.id} class="hover:bg-slate-50">
+                                            <td class="p-3 font-bold border-r text-slate-800">{c.name}</td>
+                                            {feeHeads.map(h => {
+                                                const key = `${c.id}_${h.id}`;
+                                                return (
+                                                    <td key={h.id} class="p-2 border-r text-center">
+                                                        <div class="flex items-center justify-center gap-1">
+                                                            <span class="text-xs text-slate-400">₹</span>
+                                                            <input
+                                                                type="number"
+                                                                value={matrix[key] !== undefined ? matrix[key] : ""}
+                                                                onChange={(e) => handleMatrixChange(c.id, h.id, e.target.value)}
+                                                                onBlur={() => saveFeeAmount(c.id, h.id)}
+                                                                placeholder="0"
+                                                                class="w-24 px-2 py-1 border rounded text-center font-mono text-sm focus:bg-sky-50 focus:border-sky-500"
+                                                            />
+                                                        </div>
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="bg-white rounded-xl shadow-sm border p-6">
+                            <h4 class="font-bold text-slate-900 mb-3">➕ Add New Class / Stream</h4>
+                            <form onSubmit={handleAddClass} class="space-y-3 text-sm">
+                                <div>
+                                    <label class="block text-xs font-bold mb-1">Class Name</label>
+                                    <input
+                                        type="text"
+                                        value={newClassName}
+                                        onChange={(e) => setNewClassName(e.target.value)}
+                                        placeholder="e.g. 11th Science - Sec B"
+                                        class="w-full p-2 border rounded"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold mb-1">Category</label>
+                                    <select
+                                        value={newClassCategory}
+                                        onChange={(e) => setNewClassCategory(e.target.value)}
+                                        class="w-full p-2 border rounded"
+                                    >
+                                        <option value="PRE_PRIMARY">PRE_PRIMARY</option>
+                                        <option value="PRIMARY">PRIMARY</option>
+                                        <option value="MIDDLE">MIDDLE</option>
+                                        <option value="SECONDARY">SECONDARY</option>
+                                        <option value="SENIOR_SECONDARY">SENIOR_SECONDARY</option>
+                                    </select>
+                                </div>
+                                <button type="submit" class="px-4 py-2 bg-sky-600 text-white font-bold rounded shadow">
+                                    Add Class
+                                </button>
+                            </form>
+                        </div>
+
+                        <div class="bg-white rounded-xl shadow-sm border p-6">
+                            <h4 class="font-bold text-slate-900 mb-3">➕ Add New Fee Head</h4>
+                            <form onSubmit={handleAddFeeHead} class="space-y-3 text-sm">
+                                <div>
+                                    <label class="block text-xs font-bold mb-1">Fee Head Title</label>
+                                    <input
+                                        type="text"
+                                        value={newFeeTitle}
+                                        onChange={(e) => setNewFeeTitle(e.target.value)}
+                                        placeholder="e.g. Smart Class, Transport"
+                                        class="w-full p-2 border rounded"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold mb-1">Recurrence Type</label>
+                                    <select
+                                        value={newFeeType}
+                                        onChange={(e) => setNewFeeType(e.target.value)}
+                                        class="w-full p-2 border rounded"
+                                    >
+                                        <option value="MONTHLY">MONTHLY</option>
+                                        <option value="QUARTERLY">QUARTERLY</option>
+                                        <option value="ANNUAL">ANNUAL</option>
+                                        <option value="ONE_TIME">ONE_TIME</option>
+                                    </select>
+                                </div>
+                                <button type="submit" class="px-4 py-2 bg-sky-600 text-white font-bold rounded shadow">
+                                    Add Fee Head
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 4. BATCH BILLING TAB
+        // ==========================================
+        function BatchBillingTab({ showToast, fetchSummary }) {
+            const [monthYear, setMonthYear] = useState("October 2026");
+            const [academicYear, setAcademicYear] = useState("2026-2027");
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [billResult, setBillResult] = useState(null);
+
+            const handleGenerateBills = async (e) => {
+                e.preventDefault();
+                setIsGenerating(true);
+                setBillResult(null);
+
+                try {
+                    const res = await fetch(`${API_BASE}/api/generate-monthly-bills`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            month_year: monthYear,
+                            academic_year: academicYear
+                        })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || "Generation failed");
+                    setBillResult(data);
+                    showToast(data.message, "success");
+                    fetchSummary();
+                } catch (err) {
+                    showToast(err.message, "error");
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            return (
+                <div class="max-w-2xl mx-auto space-y-6">
+                    <div class="bg-white rounded-xl shadow-sm border p-8">
+                        <div class="text-center mb-6">
+                            <div class="text-4xl mb-2">⚡</div>
+                            <h3 class="text-xl font-bold text-slate-900">Automated Monthly Batch Billing</h3>
+                            <p class="text-xs text-slate-500 mt-1">
+                                Auto-calculates fees for all active St. Kabir Public School students based on class fee heads, subtracts flat discounts, adds previous dues balance, and updates ledgers.
+                            </p>
+                        </div>
+
+                        <form onSubmit={handleGenerateBills} class="space-y-4 text-sm">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Billing Month & Year *</label>
+                                    <input
+                                        type="text"
+                                        value={monthYear}
+                                        onChange={(e) => setMonthYear(e.target.value)}
+                                        placeholder="e.g. October 2026"
+                                        class="w-full p-3 bg-slate-50 border rounded-lg font-bold"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Academic Year *</label>
+                                    <input
+                                        type="text"
+                                        value={academicYear}
+                                        onChange={(e) => setAcademicYear(e.target.value)}
+                                        placeholder="e.g. 2026-2027"
+                                        class="w-full p-3 bg-slate-50 border rounded-lg font-bold"
+                                        required
+                                    />
+                                </div>
+                            </div>
+
+                            <button
+                                type="submit"
+                                disabled={isGenerating}
+                                class="w-full py-4 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl shadow-lg transition text-base"
+                            >
+                                {isGenerating ? "Generating Charge Sheets..." : "🚀 Run Batch Bill Generation For All Students"}
+                            </button>
+                        </form>
+
+                        {billResult && (
+                            <div class="mt-6 bg-emerald-50 border border-emerald-200 p-4 rounded-xl text-emerald-900 text-sm">
+                                <h4 class="font-bold flex items-center gap-2">✅ Batch Billing Completed</h4>
+                                <p class="mt-1">{billResult.message}</p>
+                                <div class="mt-2 text-xs font-mono font-bold flex gap-4">
+                                    <span>Students Billed: {billResult.count}</span>
+                                    <span>Total Net Billed: ₹{billResult.total_gross_billed.toLocaleString('en-IN')}</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 5. REPORTS & DEFAULTERS TAB
+        // ==========================================
+        function ReportsTab({ summary, classList, showToast }) {
+            const [defaulters, setDefaulters] = useState([]);
+            const [selectedClass, setSelectedClass] = useState("");
+            const [searchQuery, setSearchQuery] = useState("");
+
+            useEffect(() => {
+                fetchDefaulters();
+            }, [selectedClass, searchQuery]);
+
+            const fetchDefaulters = async () => {
+                let url = `${API_BASE}/api/students?balance_status=DEFAULTER&q=${encodeURIComponent(searchQuery)}`;
+                if (selectedClass) url += `&class_id=${selectedClass}`;
+                try {
+                    const res = await fetch(url);
+                    setDefaulters(await res.json());
+                } catch (e) {
+                    console.error("Failed to load defaulters", e);
+                }
+            };
+
+            const exportCSV = () => {
+                if (defaulters.length === 0) {
+                    showToast("No defaulter data to export", "error");
+                    return;
+                }
+                const headers = ["Admission No", "Student Name", "Class", "Father Name", "Contact", "Pending Dues Balance (Rs)"];
+                const rows = defaulters.map(s => [
+                    `"${s.admission_no}"`,
+                    `"${s.name}"`,
+                    `"${s.class_name}"`,
+                    `"${s.father_name || ''}"`,
+                    `"${s.contact_no || ''}"`,
+                    s.current_balance
+                ]);
+
+                const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `St_Kabir_Defaulters_${new Date().toISOString().slice(0,10)}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                showToast("Defaulters report exported as CSV!", "success");
+            };
+
+            return (
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                        <div class="bg-white rounded-xl shadow-sm border p-6 border-l-4 border-l-rose-500">
+                            <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Dues Pending</span>
+                            <div class="text-3xl font-black text-rose-600 font-mono mt-1">
+                                ₹{summary.total_dues_pending ? summary.total_dues_pending.toLocaleString('en-IN') : 0}
+                            </div>
+                            <span class="text-xs text-slate-400 mt-1 block">Across St. Kabir Public School</span>
+                        </div>
+
+                        <div class="bg-white rounded-xl shadow-sm border p-6 border-l-4 border-l-emerald-500">
+                            <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Cash Collected Today</span>
+                            <div class="text-3xl font-black text-emerald-600 font-mono mt-1">
+                                ₹{summary.total_cash_today ? summary.total_cash_today.toLocaleString('en-IN') : 0}
+                            </div>
+                            <span class="text-xs text-slate-400 mt-1 block">Counter collections today</span>
+                        </div>
+
+                        <div class="bg-white rounded-xl shadow-sm border p-6 border-l-4 border-l-amber-500">
+                            <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">Count of Defaulters</span>
+                            <div class="text-3xl font-black text-amber-600 font-mono mt-1">
+                                {summary.defaulters_count || 0}
+                            </div>
+                            <span class="text-xs text-slate-400 mt-1 block">Out of {summary.total_students} total students</span>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-sm border p-6">
+                        <div class="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+                            <h3 class="font-bold text-lg text-slate-900">🚨 Fee Defaulters List</h3>
+
+                            <div class="flex items-center gap-3 w-full md:w-auto">
+                                <input
+                                    type="text"
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    placeholder="Filter by name..."
+                                    class="px-3 py-2 border rounded-lg text-xs"
+                                />
+                                <select
+                                    value={selectedClass}
+                                    onChange={(e) => setSelectedClass(e.target.value)}
+                                    class="px-3 py-2 border rounded-lg text-xs font-medium"
+                                >
+                                    <option value="">All Classes</option>
+                                    {classList.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                                <button
+                                    onClick={exportCSV}
+                                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs shadow flex items-center gap-1.5 whitespace-nowrap"
+                                >
+                                    📥 Export CSV / Excel
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left border">
+                                <thead class="bg-slate-800 text-white text-xs uppercase font-semibold">
+                                    <tr>
+                                        <th class="p-3">Adm No</th>
+                                        <th class="p-3">Student Name</th>
+                                        <th class="p-3">Class</th>
+                                        <th class="p-3">Father's Name</th>
+                                        <th class="p-3">Contact</th>
+                                        <th class="p-3 font-mono">Pending Dues Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100">
+                                    {defaulters.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="6" class="p-8 text-center text-slate-400 text-sm">
+                                                🎉 No fee defaulters found matching filters!
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        defaulters.map(s => (
+                                            <tr key={s.id} class="hover:bg-slate-50">
+                                                <td class="p-3 font-mono font-bold text-slate-800">{s.admission_no}</td>
+                                                <td class="p-3 font-bold text-slate-900">{s.name}</td>
+                                                <td class="p-3">
+                                                    <span class="bg-slate-100 px-2 py-0.5 rounded text-xs border font-semibold">
+                                                        {s.class_name}
+                                                    </span>
+                                                </td>
+                                                <td class="p-3 text-slate-600">{s.father_name || "N/A"}</td>
+                                                <td class="p-3 text-slate-600 font-mono">{s.contact_no || "N/A"}</td>
+                                                <td class="p-3 font-mono font-bold text-rose-600 text-base">
+                                                    ₹{s.current_balance.toLocaleString('en-IN')}
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 6. ADMIN USER MANAGEMENT TAB (Only Admin Can Access!)
+        // ==========================================
+        function UserManagementTab({ showToast }) {
+            const [users, setUsers] = useState([]);
+            const [newUsername, setNewUsername] = useState("");
+            const [newPassword, setNewPassword] = useState("");
+            const [newFullName, setNewFullName] = useState("");
+            const [newRole, setNewRole] = useState("CASHIER");
+
+            useEffect(() => {
+                fetchUsers();
+            }, []);
+
+            const fetchUsers = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/users`);
+                    setUsers(await res.json());
+                } catch (e) {
+                    console.error("Failed to load users", e);
+                }
+            };
+
+            const handleCreateUser = async (e) => {
+                e.preventDefault();
+                try {
+                    const res = await fetch(`${API_BASE}/api/users`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            username: newUsername,
+                            password: newPassword,
+                            full_name: newFullName,
+                            role: newRole
+                        })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || "Error creating user");
+
+                    showToast(`User ID '${newUsername}' created successfully!`, "success");
+                    setNewUsername("");
+                    setNewPassword("");
+                    setNewFullName("");
+                    fetchUsers();
+                } catch (err) {
+                    showToast(err.message, "error");
+                }
+            };
+
+            const handleDeleteUser = async (userId, username) => {
+                if (!confirm(`Are you sure you want to delete staff account '${username}'?`)) return;
+                try {
+                    await fetch(`${API_BASE}/api/users/${userId}`, { method: "DELETE" });
+                    showToast(`User account '${username}' deleted.`, "success");
+                    fetchUsers();
+                } catch (e) {
+                    showToast("Failed to delete user", "error");
+                }
+            };
+
+            return (
+                <div class="space-y-8 max-w-5xl mx-auto">
+                    <div class="bg-white rounded-xl shadow-sm border p-6">
+                        <h3 class="font-bold text-xl text-slate-900 mb-2 flex items-center gap-2">
+                            <span>👥</span> Staff User Accounts & Password Management
+                        </h3>
+                        <p class="text-xs text-slate-500 mb-6">
+                            Only Principal / Admin accounts can create and delete Cashier & Admin User IDs.
+                        </p>
+
+                        <div class="overflow-x-auto mb-8">
+                            <table class="w-full text-sm text-left border">
+                                <thead class="bg-slate-800 text-white text-xs uppercase font-semibold">
+                                    <tr>
+                                        <th class="p-3">User ID (Username)</th>
+                                        <th class="p-3">Staff Full Name</th>
+                                        <th class="p-3">Assigned Role</th>
+                                        <th class="p-3">Created On</th>
+                                        <th class="p-3 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100">
+                                    {users.map(u => (
+                                        <tr key={u.id} class="hover:bg-slate-50">
+                                            <td class="p-3 font-mono font-bold text-slate-900">{u.username}</td>
+                                            <td class="p-3 font-semibold text-slate-800">{u.full_name}</td>
+                                            <td class="p-3">
+                                                <span class={`px-2.5 py-1 rounded text-xs font-bold ${
+                                                    u.role === 'ADMIN' 
+                                                    ? 'bg-purple-100 text-purple-800 border border-purple-200' 
+                                                    : 'bg-sky-100 text-sky-800 border border-sky-200'
+                                                }`}>
+                                                    {u.role === 'ADMIN' ? '👑 ADMIN' : '👤 CASHIER'}
+                                                </span>
+                                            </td>
+                                            <td class="p-3 text-xs text-slate-500 font-mono">{u.created_at}</td>
+                                            <td class="p-3 text-right">
+                                                {u.username !== 'admin' && (
+                                                    <button
+                                                        onClick={() => handleDeleteUser(u.id, u.username)}
+                                                        class="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded text-xs font-bold border border-rose-200"
+                                                    >
+                                                        🗑️ Delete
+                                                    </button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* CREATE USER FORM */}
+                        <div class="bg-slate-50 p-6 rounded-xl border">
+                            <h4 class="font-bold text-slate-900 mb-4 flex items-center gap-2">
+                                ➕ Create New Staff User ID & Password
+                            </h4>
+                            <form onSubmit={handleCreateUser} class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">User ID / Username *</label>
+                                    <input
+                                        type="text"
+                                        value={newUsername}
+                                        onChange={(e) => setNewUsername(e.target.value)}
+                                        placeholder="e.g. cashier2"
+                                        class="w-full p-2.5 bg-white border rounded-lg font-mono"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Password *</label>
+                                    <input
+                                        type="password"
+                                        value={newPassword}
+                                        onChange={(e) => setNewPassword(e.target.value)}
+                                        placeholder="Enter password"
+                                        class="w-full p-2.5 bg-white border rounded-lg"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Staff Full Name *</label>
+                                    <input
+                                        type="text"
+                                        value={newFullName}
+                                        onChange={(e) => setNewFullName(e.target.value)}
+                                        placeholder="e.g. Ramesh Kumar"
+                                        class="w-full p-2.5 bg-white border rounded-lg"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Assign Security Role *</label>
+                                    <select
+                                        value={newRole}
+                                        onChange={(e) => setNewRole(e.target.value)}
+                                        class="w-full p-2.5 bg-white border rounded-lg font-bold"
+                                    >
+                                        <option value="CASHIER">👤 CASHIER (Data Entry Counter)</option>
+                                        <option value="ADMIN">👑 ADMIN (Principal / Accountant)</option>
+                                    </select>
+                                </div>
+                                <div class="sm:col-span-2 pt-2">
+                                    <button
+                                        type="submit"
+                                        class="w-full py-3 bg-purple-700 hover:bg-purple-800 text-white font-bold rounded-xl shadow-lg transition"
+                                    >
+                                        Create Staff Account
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 7. LAN SETUP GUIDE TAB
+        // ==========================================
+        function LanSetupTab({ lanInfo }) {
+            return (
+                <div class="max-w-4xl mx-auto space-y-6">
+                    <div class="bg-white rounded-xl shadow-sm border p-8">
+                        <div class="flex items-center gap-4 border-b pb-6 mb-6">
+                            <div class="w-14 h-14 bg-sky-100 text-sky-700 rounded-xl flex items-center justify-center text-3xl font-bold">
+                                🌐
+                            </div>
+                            <div>
+                                <h3 class="text-2xl font-bold text-slate-900">Campus LAN Setup & Connection Guide</h3>
+                                <p class="text-sm text-slate-500">Access St. Kabir Public School fee system from any cashier laptop or principal computer on campus Wi-Fi/LAN.</p>
+                            </div>
+                        </div>
+
+                        <div class="bg-sky-50 border border-sky-200 rounded-xl p-5 mb-8">
+                            <span class="text-xs uppercase tracking-wider text-sky-800 font-bold block mb-1">Host Server Access URL</span>
+                            <div class="flex items-center justify-between">
+                                <span class="font-mono text-2xl font-black text-sky-900">{lanInfo.access_url}</span>
+                                <span class="bg-sky-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg">LIVE ON LOCAL NETWORK</span>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+                            <div class="border rounded-xl p-5 bg-slate-50">
+                                <h4 class="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                                    <span class="w-6 h-6 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs">1</span>
+                                    Static Local IP Setup
+                                </h4>
+                                <p class="text-xs text-slate-600 leading-relaxed">
+                                    Assign a static IP (e.g. <b>{lanInfo.local_ip}</b>) to this host computer in Windows Network Settings $\rightarrow$ IPv4 Properties so the URL never changes when router restarts.
+                                </p>
+                            </div>
+
+                            <div class="border rounded-xl p-5 bg-slate-50">
+                                <h4 class="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                                    <span class="w-6 h-6 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs">2</span>
+                                    Firewall Inbound Rule
+                                </h4>
+                                <p class="text-xs text-slate-600 leading-relaxed">
+                                    If other PCs cannot connect, open Windows Defender Firewall $\rightarrow$ Inbound Rules $\rightarrow$ Add New Rule for Port <b>8000</b>.
+                                </p>
+                            </div>
+
+                            <div class="border rounded-xl p-5 bg-slate-50">
+                                <h4 class="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                                    <span class="w-6 h-6 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs">3</span>
+                                    Backend Host Binding
+                                </h4>
+                                <p class="text-xs text-slate-600 leading-relaxed">
+                                    Backend runs on <b>0.0.0.0:8000</b> allowing all incoming campus router traffic.
+                                </p>
+                            </div>
+
+                            <div class="border rounded-xl p-5 bg-slate-50">
+                                <h4 class="font-bold text-slate-900 mb-2 flex items-center gap-2">
+                                    <span class="w-6 h-6 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs">4</span>
+                                    Open Browser on Campus PCs
+                                </h4>
+                                <p class="text-xs text-slate-600 leading-relaxed">
+                                    On cashier laptops, open browser and navigate directly to <b class="font-mono text-sky-700">{lanInfo.access_url}</b>.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById("root"));
+        root.render(<App />);
+    </script>
+</body>
+</html>
