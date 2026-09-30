@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 import os
 
@@ -19,8 +20,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Self-healing static files generator to ensure Render never crashes if static/index.html is missing
+def ensure_static_files():
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if not os.path.exists(static_dir):
+        os.makedirs(static_dir, exist_ok=True)
+    
+    html_file = os.path.join(static_dir, "index.html")
+    css_file = os.path.join(static_dir, "styles.css")
+
+    if not os.path.exists(css_file):
+        with open(css_file, "w", encoding="utf-8") as f:
+            f.write("""@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background-color: #f8fafc; color: #0f172a; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+@media print {
+    body * { visibility: hidden; }
+    #printable-receipt-area, #printable-receipt-area * { visibility: visible; }
+    #printable-receipt-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; background: white; }
+    @page { margin: 5mm; size: auto; }
+}
+.receipt-thermal { width: 80mm; max-width: 80mm; margin: 0 auto; padding: 10px; font-family: 'Courier New', Courier, monospace; font-size: 12px; line-height: 1.3; color: #000; }
+.receipt-a4 { width: 100%; max-width: 800px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px; background: white; }
+""")
+
+    if not os.path.exists(html_file):
+        # Read local index.html if exists elsewhere or write from local template
+        source_html = os.path.join(os.path.dirname(__file__), "static", "index.html")
+        if os.path.exists(source_html) and source_html != html_file:
+            with open(source_html, "r", encoding="utf-8") as rf:
+                content = rf.read()
+            with open(html_file, "w", encoding="utf-8") as wf:
+                wf.write(content)
+
 @app.on_event("startup")
 def startup_event():
+    ensure_static_files()
     seed_db()
 
 def get_local_ip():
@@ -599,11 +634,25 @@ def get_reports_summary(role: Optional[str] = Query("CASHIER")):
 # Serve static frontend files
 static_path = os.path.join(os.path.dirname(__file__), "static")
 if not os.path.exists(static_path):
-    os.makedirs(static_path)
+    os.makedirs(static_path, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=static_path), name="static")
 
 @app.get("/")
 def read_root():
-    from fastapi.responses import FileResponse
-    return FileResponse(os.path.join(static_path, "index.html"))
+    html_file = os.path.join(static_path, "index.html")
+    if os.path.exists(html_file):
+        return FileResponse(html_file)
+    else:
+        # Fallback inline response if static/index.html was omitted on GitHub upload
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <head><title>St. Kabir Public School - Static Files Missing</title></head>
+        <body style="font-family:sans-serif; text-align:center; padding:50px;">
+            <h2>⚠️ St. Kabir Public School Fee System</h2>
+            <p>The backend is running! However, <b>static/index.html</b> was not found in the GitHub upload.</p>
+            <p>Please upload the <b>static</b> folder (containing index.html) to your GitHub repository.</p>
+        </body>
+        </html>
+        """)
